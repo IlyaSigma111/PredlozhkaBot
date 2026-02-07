@@ -1,193 +1,152 @@
-// script.js
-// Основной скрипт с интеграцией Firebase
-
-// ===== КОНСТАНТЫ =====
+// ===== КОНСТАНТЫ И КОНФИГУРАЦИЯ =====
 const BOT_TOKEN = '8597583917:AAFPOQqsJSe8vAxP0Af8VEEQwgKYH3iogT8';
 const API_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+// Firebase конфигурация
+const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyB5l0kA2rLyEy21zsosJTU0M_vxJHS5Qpk",
+    authDomain: "predlozhkabot.firebaseapp.com",
+    databaseURL: "https://predlozhkabot-default-rtdb.firebaseio.com",
+    projectId: "predlozhkabot",
+    storageBucket: "predlozhkabot.firebasestorage.app",
+    messagingSenderId: "869552257549",
+    appId: "1:869552257549:web:d2c0569096aa8ebe78b344"
+};
 
 // ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
 let botOnline = false;
 let messagesSent = 0;
-let botStartTime = new Date();
 let db = null;
 let currentPage = 1;
 const pageSize = 10;
 let currentFilter = 'all';
 let currentReplySuggestion = null;
 let suggestionsListener = null;
-let activityChart = null;
+let allSuggestions = [];
 
 // ===== ИНИЦИАЛИЗАЦИЯ =====
 document.addEventListener('DOMContentLoaded', async function() {
-    console.log('Бот-предложка загружен');
+    console.log('🚀 Бот-предложка инициализирован');
     
-    // Инициализируем Firebase
-    await initializeFirebase();
-    
-    // Загружаем статистику
-    loadStats();
-    
-    // Проверяем статус бота
-    checkBotStatus();
-    
-    // Обновляем время работы
-    setInterval(updateUptime, 1000);
-    
-    // Обновляем счётчик символов
-    document.getElementById('messageText').addEventListener('input', updateCharCount);
-    
-    // Инициализируем поле получателя
-    updateRecipientField();
-    
-    // Загружаем предложения из Firebase
-    loadSuggestions();
-    
-    // Загружаем аналитику
-    loadAnalytics();
+    try {
+        // Инициализируем Firebase
+        await initializeFirebase();
+        
+        // Загружаем статистику из localStorage
+        loadLocalStats();
+        
+        // Проверяем статус бота
+        checkBotStatus();
+        
+        // Обновляем время
+        updateTime();
+        setInterval(updateTime, 1000);
+        
+        // Настраиваем UI
+        document.getElementById('messageText').addEventListener('input', updateCharCount);
+        updateRecipientField();
+        
+        // Загружаем данные из Firebase
+        loadFirebaseData();
+        
+        // Настраиваем обновление в реальном времени
+        setupRealtimeUpdates();
+        
+    } catch (error) {
+        console.error('❌ Ошибка инициализации:', error);
+        showStatus('Система не загружена. Проверьте подключение к Firebase.', 'error');
+    }
 });
 
-// ===== FIREBASE ФУНКЦИИ =====
+// ===== FIREBASE =====
 async function initializeFirebase() {
     try {
-        // Проверяем, что Firebase загружен
-        if (!window.firebaseDB) {
-            throw new Error("Firebase не инициализирован");
-        }
-        
-        db = window.firebaseDB;
+        // Инициализируем Firebase
+        firebase.initializeApp(FIREBASE_CONFIG);
+        db = firebase.firestore();
         
         // Проверяем подключение
         await db.collection('test').doc('test').get();
         
-        // Обновляем статус Firebase
-        document.getElementById('firebaseStatus').className = 'status-dot online';
-        document.getElementById('firebaseStatusText').textContent = 'Подключено';
-        document.getElementById('firebaseStatusText').style.color = '#10b981';
-        
-        console.log("Firebase успешно подключен");
-        
-        // Настраиваем реальное обновление данных
-        setupRealtimeUpdates();
-        
-        // Обновляем время последней синхронизации
-        updateLastSync();
+        // Обновляем статус
+        updateFirebaseStatus(true);
+        console.log('✅ Firebase подключен');
         
     } catch (error) {
-        console.error("Ошибка подключения Firebase:", error);
-        document.getElementById('firebaseStatus').className = 'status-dot offline';
-        document.getElementById('firebaseStatusText').textContent = 'Ошибка подключения';
-        document.getElementById('firebaseStatusText').style.color = '#ef4444';
+        console.error('❌ Ошибка Firebase:', error);
+        updateFirebaseStatus(false);
+        throw error;
+    }
+}
+
+function updateFirebaseStatus(connected) {
+    const statusEl = document.getElementById('firebaseStatusText');
+    if (connected) {
+        statusEl.textContent = 'Подключено';
+        statusEl.style.color = '#10b981';
+        statusEl.parentElement.querySelector('.status-dot').className = 'status-dot online';
+    } else {
+        statusEl.textContent = 'Ошибка';
+        statusEl.style.color = '#ef4444';
+        statusEl.parentElement.querySelector('.status-dot').className = 'status-dot offline';
     }
 }
 
 function setupRealtimeUpdates() {
-    // Отписываемся от предыдущего слушателя
+    if (!db) return;
+    
+    // Отписываемся от старого слушателя
     if (suggestionsListener) {
         suggestionsListener();
     }
     
-    // Подписываемся на обновления предложений
+    // Подписываемся на обновления
     suggestionsListener = db.collection('suggestions')
         .orderBy('timestamp', 'desc')
-        .limit(100)
         .onSnapshot((snapshot) => {
-            console.log("Получены обновления из Firebase");
-            updateLastSync();
+            console.log('📥 Получены обновления из Firebase');
             
-            // Обновляем UI с новыми данными
-            const suggestions = [];
+            allSuggestions = [];
             snapshot.forEach((doc) => {
-                suggestions.push({
+                allSuggestions.push({
                     id: doc.id,
                     ...doc.data()
                 });
             });
             
-            updateSuggestionsUI(suggestions);
-            updateAnalytics(suggestions);
+            // Обновляем UI
+            updateSuggestionsUI();
+            updateStats();
+            updateLastUpdateTime();
         }, (error) => {
-            console.error("Ошибка получения обновлений:", error);
+            console.error('❌ Ошибка обновлений:', error);
         });
 }
 
-async function saveSuggestionToFirebase(suggestion) {
-    if (!db) {
-        console.error("Firebase не инициализирован");
-        return null;
-    }
+async function loadFirebaseData() {
+    if (!db) return;
     
     try {
-        const docRef = await db.collection('suggestions').add({
-            ...suggestion,
-            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-            read: false,
-            answered: false
-        });
+        const snapshot = await db.collection('suggestions').get();
+        allSuggestions = [];
         
-        console.log("Предложение сохранено в Firebase с ID:", docRef.id);
-        return docRef.id;
-    } catch (error) {
-        console.error("Ошибка сохранения в Firebase:", error);
-        return null;
-    }
-}
-
-async function updateSuggestionInFirebase(suggestionId, updates) {
-    if (!db) {
-        console.error("Firebase не инициализирован");
-        return false;
-    }
-    
-    try {
-        await db.collection('suggestions').doc(suggestionId).update({
-            ...updates,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        
-        console.log("Предложение обновлено в Firebase:", suggestionId);
-        return true;
-    } catch (error) {
-        console.error("Ошибка обновления в Firebase:", error);
-        return false;
-    }
-}
-
-async function getSuggestionsFromFirebase(page = 1, filter = 'all') {
-    if (!db) {
-        console.error("Firebase не инициализирован");
-        return [];
-    }
-    
-    try {
-        let query = db.collection('suggestions').orderBy('timestamp', 'desc');
-        
-        // Применяем фильтры
-        if (filter === 'new') {
-            query = query.where('read', '==', false);
-        } else if (filter === 'answered') {
-            query = query.where('answered', '==', true);
-        }
-        
-        // Пагинация
-        const startAt = (page - 1) * pageSize;
-        const snapshot = await query.limit(pageSize).get();
-        
-        const suggestions = [];
         snapshot.forEach((doc) => {
-            suggestions.push({
+            allSuggestions.push({
                 id: doc.id,
                 ...doc.data()
             });
         });
         
-        return suggestions;
+        updateSuggestionsUI();
+        updateStats();
+        updateLastUpdateTime();
+        
     } catch (error) {
-        console.error("Ошибка получения данных из Firebase:", error);
-        return [];
+        console.error('❌ Ошибка загрузки данных:', error);
     }
 }
 
-// ===== ТЕЛЕГРАМ API ФУНКЦИИ =====
+// ===== TELEGRAM API =====
 async function checkBotStatus() {
     const statusBadge = document.getElementById('botStatus');
     
@@ -203,9 +162,10 @@ async function checkBotStatus() {
                 <span>Бот онлайн: ${data.result.first_name}</span>
             `;
             
-            // Обновляем информацию о боте
-            document.getElementById('botTokenDisplay').textContent = BOT_TOKEN;
-            updateSubscribersCount();
+            document.getElementById('botStatusText').textContent = 'В сети';
+            document.getElementById('botTokenText').textContent = BOT_TOKEN;
+            
+            console.log('✅ Бот подключен');
         } else {
             throw new Error(data.description);
         }
@@ -216,13 +176,15 @@ async function checkBotStatus() {
             <div class="status-dot offline"></div>
             <span>Бот офлайн</span>
         `;
-        showStatusMessage('⚠️ Бот недоступен. Проверьте токен и интернет.', 'error');
+        
+        document.getElementById('botStatusText').textContent = 'Офлайн';
+        showStatus('⚠️ Бот недоступен. Проверьте токен.', 'error');
     }
 }
 
 async function sendMessage() {
     if (!botOnline) {
-        showStatusMessage('❌ Бот офлайн. Проверьте подключение.', 'error');
+        showStatus('❌ Бот офлайн. Проверьте подключение.', 'error');
         return;
     }
     
@@ -230,43 +192,43 @@ async function sendMessage() {
     const message = document.getElementById('messageText').value.trim();
     
     if (!message) {
-        showStatusMessage('❌ Введите сообщение', 'error');
+        showStatus('❌ Введите сообщение', 'error');
         return;
     }
     
     if (sendType === 'user') {
-        const chatId = document.getElementById('userId').value.trim();
-        if (!chatId || !/^-?\d+$/.test(chatId)) {
-            showStatusMessage('❌ Введите корректный ID пользователя', 'error');
+        const userId = document.getElementById('userId').value.trim();
+        if (!userId) {
+            showStatus('❌ Введите ID пользователя', 'error');
             return;
         }
         
-        await sendToUser(chatId, message);
+        await sendToUser(userId, message);
         
-    } else if (sendType === 'all') {
+    } else if (sendType === 'broadcast') {
         if (!confirm('Отправить сообщение всем пользователям из базы?')) return;
-        await sendToAllUsers(message);
+        await sendBroadcast(message);
         
     } else if (sendType === 'test') {
-        // Для теста отправляем себе (замените на ваш ID)
-        const testUserId = 'ВАШ_TELEGRAM_ID'; // Замените здесь!
-        if (!testUserId || testUserId === 'ВАШ_TELEGRAM_ID') {
-            showStatusMessage('⚠️ Укажите ваш Telegram ID в коде для теста', 'error');
+        // Для теста - замените на свой Telegram ID
+        const testId = 'ВАШ_TELEGRAM_ID';
+        if (!testId || testId === 'ВАШ_TELEGRAM_ID') {
+            showStatus('⚠️ Укажите ваш Telegram ID в коде', 'error');
             return;
         }
-        await sendToUser(testUserId, message);
+        await sendToUser(testId, message);
     }
 }
 
-async function sendToUser(chatId, message) {
-    showStatusMessage('<i class="fas fa-spinner fa-spin"></i> Отправка...', 'info');
+async function sendToUser(userId, message) {
+    showStatus('<i class="fas fa-spinner fa-spin"></i> Отправка...', 'info');
     
     try {
         const response = await fetch(`${API_URL}/sendMessage`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                chat_id: chatId,
+                chat_id: userId,
                 text: message,
                 parse_mode: 'HTML',
                 disable_web_page_preview: true
@@ -276,149 +238,122 @@ async function sendToUser(chatId, message) {
         const data = await response.json();
         
         if (data.ok) {
-            // Обновляем статистику
+            // Увеличиваем счётчик
             messagesSent++;
-            localStorage.setItem('messages_sent', messagesSent.toString());
-            document.getElementById('messagesSentCount').textContent = messagesSent;
+            localStorage.setItem('messages_sent', messagesSent);
+            document.getElementById('sentCount').textContent = messagesSent;
             
-            showStatusMessage('✅ Сообщение отправлено!', 'success');
+            showStatus('✅ Сообщение отправлено!', 'success');
+            clearForm();
             
             // Сохраняем в историю
-            await saveMessageToHistory(chatId, message);
+            saveToHistory(userId, message);
             
-            // Очищаем форму
-            clearForm();
         } else {
-            showStatusMessage(`❌ Ошибка: ${data.description}`, 'error');
+            showStatus(`❌ Ошибка: ${data.description}`, 'error');
         }
     } catch (error) {
         console.error('Ошибка отправки:', error);
-        showStatusMessage('❌ Ошибка сети при отправке', 'error');
+        showStatus('❌ Ошибка сети', 'error');
     }
 }
 
-async function sendToAllUsers(message) {
-    if (!db) {
-        showStatusMessage('❌ Firebase не подключен', 'error');
+async function sendBroadcast(message) {
+    if (!db || allSuggestions.length === 0) {
+        showStatus('❌ Нет пользователей для рассылки', 'error');
         return;
     }
     
-    showStatusMessage('<i class="fas fa-spinner fa-spin"></i> Получаю список пользователей...', 'info');
+    // Получаем уникальных пользователей
+    const users = [...new Set(allSuggestions.map(s => s.userId).filter(id => id))];
     
-    try {
-        // Получаем уникальных пользователей из предложений
-        const snapshot = await db.collection('suggestions').get();
-        const users = new Set();
-        
-        snapshot.forEach((doc) => {
-            const data = doc.data();
-            if (data.userId) {
-                users.add(data.userId);
-            }
-        });
-        
-        const userIds = Array.from(users);
-        
-        if (userIds.length === 0) {
-            showStatusMessage('❌ Нет пользователей в базе', 'error');
-            return;
-        }
-        
-        if (!confirm(`Отправить сообщение ${userIds.length} пользователям?`)) return;
-        
-        showStatusMessage(`<i class="fas fa-spinner fa-spin"></i> Рассылка ${userIds.length} пользователям...`, 'info');
-        
-        let successCount = 0;
-        let failCount = 0;
-        
-        // Отправляем каждому пользователю
-        for (const userId of userIds) {
-            try {
-                const response = await fetch(`${API_URL}/sendMessage`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        chat_id: userId,
-                        text: message,
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true
-                    })
-                });
-                
-                const data = await response.json();
-                if (data.ok) {
-                    successCount++;
-                    messagesSent++;
-                } else {
-                    failCount++;
-                    console.error(`Ошибка отправки пользователю ${userId}:`, data.description);
-                }
-                
-                // Задержка между сообщениями
-                await new Promise(resolve => setTimeout(resolve, 200));
-            } catch (error) {
-                failCount++;
-                console.error(`Ошибка сети для пользователя ${userId}:`, error);
-            }
-        }
-        
-        // Обновляем статистику
-        localStorage.setItem('messages_sent', messagesSent.toString());
-        document.getElementById('messagesSentCount').textContent = messagesSent;
-        
-        showStatusMessage(`✅ Отправлено: ${successCount}, Не отправлено: ${failCount}`, 'success');
-        
-    } catch (error) {
-        console.error('Ошибка получения пользователей:', error);
-        showStatusMessage('❌ Ошибка получения данных', 'error');
+    if (users.length === 0) {
+        showStatus('❌ Нет пользователей в базе', 'error');
+        return;
     }
+    
+    showStatus(`<i class="fas fa-spinner fa-spin"></i> Рассылка ${users.length} пользователям...`, 'info');
+    
+    let success = 0;
+    let failed = 0;
+    
+    for (const userId of users) {
+        try {
+            const response = await fetch(`${API_URL}/sendMessage`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    chat_id: userId,
+                    text: message,
+                    parse_mode: 'HTML'
+                })
+            });
+            
+            if (response.ok) {
+                success++;
+                messagesSent++;
+                
+                // Небольшая задержка между сообщениями
+                await new Promise(resolve => setTimeout(resolve, 200));
+            } else {
+                failed++;
+            }
+        } catch (error) {
+            failed++;
+        }
+    }
+    
+    // Обновляем статистику
+    localStorage.setItem('messages_sent', messagesSent);
+    document.getElementById('sentCount').textContent = messagesSent;
+    
+    showStatus(`✅ Отправлено: ${success}, Не отправлено: ${failed}`, 'success');
 }
 
 // ===== РАБОТА С ПРЕДЛОЖЕНИЯМИ =====
-async function loadSuggestions() {
-    showStatusMessage('<i class="fas fa-spinner fa-spin"></i> Загрузка предложений...', 'info');
-    
-    try {
-        const suggestions = await getSuggestionsFromFirebase(currentPage, currentFilter);
-        updateSuggestionsUI(suggestions);
-        updatePagination();
-        showStatusMessage('✅ Предложения загружены', 'success');
-    } catch (error) {
-        showStatusMessage('❌ Ошибка загрузки предложений', 'error');
-    }
-}
-
-function updateSuggestionsUI(suggestions) {
+function updateSuggestionsUI() {
     const container = document.getElementById('suggestionsContainer');
     const emptyState = document.getElementById('emptySuggestions');
     
-    if (!suggestions || suggestions.length === 0) {
+    if (!allSuggestions || allSuggestions.length === 0) {
         container.innerHTML = '';
         emptyState.style.display = 'block';
-        updateSuggestionsStats(suggestions);
         return;
     }
     
     emptyState.style.display = 'none';
+    
+    // Фильтруем предложения
+    let filtered = allSuggestions;
+    if (currentFilter === 'new') {
+        filtered = allSuggestions.filter(s => !s.read);
+    } else if (currentFilter === 'answered') {
+        filtered = allSuggestions.filter(s => s.answered);
+    }
+    
+    // Пагинация
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const pageSuggestions = filtered.slice(start, end);
+    
+    // Обновляем пагинацию
+    updatePagination(filtered.length);
+    
+    // Отрисовываем предложения
     container.innerHTML = '';
-    
-    suggestions.forEach((suggestion, index) => {
-        const element = createSuggestionElement(suggestion, index);
-        container.appendChild(element);
+    pageSuggestions.forEach((suggestion, index) => {
+        container.appendChild(createSuggestionElement(suggestion, start + index));
     });
-    
-    updateSuggestionsStats(suggestions);
 }
 
 function createSuggestionElement(suggestion, index) {
     const div = document.createElement('div');
     div.className = `suggestion-item ${suggestion.read ? '' : 'new'}`;
-    div.dataset.id = suggestion.id;
     
     // Форматируем время
     let timeText = 'Недавно';
-    if (suggestion.timestamp && suggestion.timestamp.toDate) {
-        const date = suggestion.timestamp.toDate();
+    if (suggestion.timestamp) {
+        const date = suggestion.timestamp.toDate ? suggestion.timestamp.toDate() : new Date(suggestion.timestamp);
         const now = new Date();
         const diff = now - date;
         
@@ -435,11 +370,9 @@ function createSuggestionElement(suggestion, index) {
         }
     }
     
-    // Форматируем текст сообщения
-    let messageText = suggestion.message || 'Нет текста';
-    if (messageText.length > 200) {
-        messageText = messageText.substring(0, 200) + '...';
-    }
+    // Форматируем текст
+    const message = suggestion.message || 'Нет текста';
+    const shortMessage = message.length > 200 ? message.substring(0, 200) + '...' : message;
     
     div.innerHTML = `
         <div class="suggestion-header">
@@ -453,67 +386,53 @@ function createSuggestionElement(suggestion, index) {
             <div class="suggestion-time">${timeText}</div>
         </div>
         <div class="suggestion-text">
-            ${messageText}
+            ${shortMessage}
         </div>
         <div class="suggestion-actions">
-            <button class="btn-icon small" onclick="openReplyModal('${suggestion.id}')" 
+            <button class="btn-icon" onclick="replyToSuggestion('${suggestion.id}')" 
                     title="Ответить" ${suggestion.answered ? 'disabled' : ''}>
                 <i class="fas fa-reply"></i>
             </button>
-            <button class="btn-icon small" onclick="markAsRead('${suggestion.id}')" 
+            <button class="btn-icon" onclick="toggleReadStatus('${suggestion.id}')" 
                     title="${suggestion.read ? 'Пометить непрочитанным' : 'Пометить прочитанным'}">
                 <i class="fas ${suggestion.read ? 'fa-envelope' : 'fa-check'}"></i>
             </button>
-            <button class="btn-icon small danger" onclick="deleteSuggestion('${suggestion.id}')" 
+            <button class="btn-icon danger" onclick="deleteSuggestion('${suggestion.id}')" 
                     title="Удалить">
                 <i class="fas fa-trash"></i>
             </button>
         </div>
-        ${suggestion.answered ? '<div class="answered-badge"><i class="fas fa-check-circle"></i> С ответом</div>' : ''}
+        ${suggestion.answered ? '<div class="answered-badge"><i class="fas fa-check-circle"></i> Ответ отправлен</div>' : ''}
     `;
     
     return div;
 }
 
-async function openReplyModal(suggestionId) {
-    if (!db) return;
+async function replyToSuggestion(suggestionId) {
+    const suggestion = allSuggestions.find(s => s.id === suggestionId);
+    if (!suggestion) return;
     
-    try {
-        const doc = await db.collection('suggestions').doc(suggestionId).get();
-        if (!doc.exists) {
-            showStatusMessage('❌ Предложение не найдено', 'error');
-            return;
-        }
-        
-        const suggestion = doc.data();
-        currentReplySuggestion = {
-            id: suggestionId,
-            ...suggestion
-        };
-        
-        // Заполняем модальное окно
-        document.getElementById('originalMessage').innerHTML = `
-            <strong>${suggestion.userName || 'Аноним'}:</strong><br>
-            ${suggestion.message || 'Нет текста'}
-        `;
-        
-        // Настраиваем форму ответа
-        document.getElementById('sendType').value = 'user';
-        document.getElementById('userId').value = suggestion.userId || '';
-        document.getElementById('messageText').value = `Уважаемый ${suggestion.userName || 'пользователь'}!\n\n`;
-        
-        // Показываем модальное окно
-        document.getElementById('replyModal').style.display = 'block';
-        
-    } catch (error) {
-        console.error('Ошибка открытия модального окна:', error);
-        showStatusMessage('❌ Ошибка загрузки предложения', 'error');
-    }
+    currentReplySuggestion = suggestion;
+    
+    // Заполняем модальное окно
+    document.getElementById('originalMessage').innerHTML = `
+        <strong>${suggestion.userName || 'Аноним'}:</strong><br>
+        ${suggestion.message || 'Нет текста'}
+    `;
+    
+    // Настраиваем форму
+    document.getElementById('sendType').value = 'user';
+    document.getElementById('userId').value = suggestion.userId || '';
+    document.getElementById('messageText').value = `Уважаемый ${suggestion.userName || 'пользователь'}!\n\n`;
+    
+    // Показываем модальное окно
+    document.getElementById('replyModal').style.display = 'flex';
 }
 
-function closeModal() {
+function closeReplyModal() {
     document.getElementById('replyModal').style.display = 'none';
     currentReplySuggestion = null;
+    document.getElementById('replyText').value = '';
 }
 
 async function sendReply() {
@@ -521,317 +440,171 @@ async function sendReply() {
     
     const replyText = document.getElementById('replyText').value.trim();
     if (!replyText) {
-        showStatusMessage('❌ Введите текст ответа', 'error');
+        showStatus('❌ Введите текст ответа', 'error');
         return;
     }
     
-    // Отправляем сообщение пользователю
+    // Отправляем ответ
     await sendToUser(currentReplySuggestion.userId, replyText);
     
-    // Обновляем статус предложения в Firebase
-    await updateSuggestionInFirebase(currentReplySuggestion.id, {
-        answered: true,
-        answer: replyText,
-        answeredAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    // Обновляем статус предложения
+    if (db) {
+        try {
+            await db.collection('suggestions').doc(currentReplySuggestion.id).update({
+                answered: true,
+                answer: replyText,
+                answeredAt: firebase.firestore.FieldValue.serverTimestamp(),
+                read: true
+            });
+        } catch (error) {
+            console.error('Ошибка обновления:', error);
+        }
+    }
     
-    // Закрываем модальное окно
-    closeModal();
-    showStatusMessage('✅ Ответ отправлен и сохранён', 'success');
+    closeReplyModal();
+    showStatus('✅ Ответ отправлен и сохранён', 'success');
 }
 
-async function markAsRead(suggestionId) {
+async function toggleReadStatus(suggestionId) {
     if (!db) return;
     
     try {
-        const doc = await db.collection('suggestions').doc(suggestionId).get();
-        if (!doc.exists) return;
+        const suggestion = allSuggestions.find(s => s.id === suggestionId);
+        if (!suggestion) return;
         
-        const suggestion = doc.data();
-        await updateSuggestionInFirebase(suggestionId, {
-            read: !suggestion.read
+        await db.collection('suggestions').doc(suggestionId).update({
+            read: !suggestion.read,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
-        showStatusMessage(`✅ Предложение помечено как ${suggestion.read ? 'непрочитанное' : 'прочитанное'}`, 'success');
     } catch (error) {
-        console.error('Ошибка обновления статуса:', error);
-        showStatusMessage('❌ Ошибка обновления', 'error');
+        console.error('Ошибка обновления:', error);
+        showStatus('❌ Ошибка обновления', 'error');
     }
 }
 
 async function deleteSuggestion(suggestionId) {
-    if (!confirm('Удалить это предложение? Это действие нельзя отменить.')) return;
+    if (!confirm('Удалить это предложение?')) return;
     
     if (!db) return;
     
     try {
         await db.collection('suggestions').doc(suggestionId).delete();
-        showStatusMessage('✅ Предложение удалено', 'success');
+        showStatus('✅ Предложение удалено', 'success');
     } catch (error) {
         console.error('Ошибка удаления:', error);
-        showStatusMessage('❌ Ошибка удаления', 'error');
+        showStatus('❌ Ошибка удаления', 'error');
     }
 }
 
-// ===== АНАЛИТИКА И СТАТИСТИКА =====
-async function loadAnalytics() {
-    if (!db) return;
+// ===== ФИЛЬТРАЦИЯ И ПАГИНАЦИЯ =====
+function filterSuggestions(filter) {
+    currentFilter = filter;
+    currentPage = 1;
     
-    try {
-        const snapshot = await db.collection('suggestions').get();
-        const suggestions = [];
-        snapshot.forEach((doc) => {
-            suggestions.push({
-                id: doc.id,
-                ...doc.data()
-            });
-        });
-        
-        updateAnalytics(suggestions);
-        updateActivityChart(suggestions);
-        updateTopUsers(suggestions);
-        
-    } catch (error) {
-        console.error('Ошибка загрузки аналитики:', error);
+    // Обновляем активную кнопку
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    
+    updateSuggestionsUI();
+}
+
+function updatePagination(total) {
+    const totalPages = Math.ceil(total / pageSize);
+    const pageInfo = document.getElementById('pageInfo');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    
+    pageInfo.textContent = `Страница ${currentPage} из ${totalPages}`;
+    prevBtn.disabled = currentPage === 1;
+    nextBtn.disabled = currentPage === totalPages || totalPages === 0;
+}
+
+function prevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        updateSuggestionsUI();
     }
 }
 
-function updateAnalytics(suggestions) {
-    if (!suggestions) return;
+function nextPage() {
+    const filtered = getFilteredSuggestions();
+    const totalPages = Math.ceil(filtered.length / pageSize);
     
-    const total = suggestions.length;
-    const newCount = suggestions.filter(s => !s.read).length;
-    const answeredCount = suggestions.filter(s => s.answered).length;
+    if (currentPage < totalPages) {
+        currentPage++;
+        updateSuggestionsUI();
+    }
+}
+
+function getFilteredSuggestions() {
+    if (currentFilter === 'new') {
+        return allSuggestions.filter(s => !s.read);
+    } else if (currentFilter === 'answered') {
+        return allSuggestions.filter(s => s.answered);
+    }
+    return allSuggestions;
+}
+
+// ===== СТАТИСТИКА =====
+function updateStats() {
+    if (!allSuggestions) return;
+    
+    const total = allSuggestions.length;
+    const newCount = allSuggestions.filter(s => !s.read).length;
+    const todayCount = allSuggestions.filter(s => {
+        if (!s.timestamp) return false;
+        const date = s.timestamp.toDate ? s.timestamp.toDate() : new Date(s.timestamp);
+        return date.toDateString() === new Date().toDateString();
+    }).length;
+    
+    // Уникальные пользователи
+    const uniqueUsers = new Set(allSuggestions.map(s => s.userId).filter(id => id));
     
     document.getElementById('totalSuggestions').textContent = total;
     document.getElementById('newSuggestions').textContent = newCount;
-    document.getElementById('answeredSuggestions').textContent = answeredCount;
+    document.getElementById('todaySuggestions').textContent = todayCount;
+    document.getElementById('usersCount').textContent = uniqueUsers.size;
+    document.getElementById('dbCount').textContent = total;
 }
 
-function updateActivityChart(suggestions) {
-    // Группируем по дням
-    const activityByDay = {};
-    
-    suggestions.forEach(suggestion => {
-        if (suggestion.timestamp && suggestion.timestamp.toDate) {
-            const date = suggestion.timestamp.toDate();
-            const dayKey = date.toISOString().split('T')[0];
-            
-            if (!activityByDay[dayKey]) {
-                activityByDay[dayKey] = 0;
-            }
-            activityByDay[dayKey]++;
-        }
-    });
-    
-    // Сортируем по дате
-    const sortedDays = Object.keys(activityByDay).sort();
-    const last7Days = sortedDays.slice(-7);
-    
-    const ctx = document.getElementById('activityChart').getContext('2d');
-    
-    if (activityChart) {
-        activityChart.destroy();
-    }
-    
-    activityChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: last7Days.map(day => {
-                const d = new Date(day);
-                return d.toLocaleDateString('ru-RU', { weekday: 'short' });
-            }),
-            datasets: [{
-                label: 'Предложений в день',
-                data: last7Days.map(day => activityByDay[day] || 0),
-                borderColor: '#8b5cf6',
-                backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                tension: 0.4,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    ticks: {
-                        stepSize: 1
-                    }
-                }
-            }
-        }
-    });
+function loadLocalStats() {
+    messagesSent = parseInt(localStorage.getItem('messages_sent') || '0');
+    document.getElementById('sentCount').textContent = messagesSent;
 }
 
-function updateTopUsers(suggestions) {
-    // Группируем по пользователям
-    const userStats = {};
-    
-    suggestions.forEach(suggestion => {
-        const userId = suggestion.userId;
-        if (!userId) return;
-        
-        if (!userStats[userId]) {
-            userStats[userId] = {
-                count: 0,
-                name: suggestion.userName || 'Аноним',
-                lastActivity: suggestion.timestamp
-            };
-        }
-        
-        userStats[userId].count++;
-        
-        // Обновляем последнюю активность
-        if (suggestion.timestamp && suggestion.timestamp.toDate) {
-            const suggestionTime = suggestion.timestamp.toDate().getTime();
-            const currentTime = userStats[userId].lastActivity && userStats[userId].lastActivity.toDate 
-                ? userStats[userId].lastActivity.toDate().getTime()
-                : 0;
-            
-            if (suggestionTime > currentTime) {
-                userStats[userId].lastActivity = suggestion.timestamp;
-            }
-        }
-    });
-    
-    // Сортируем по количеству предложений
-    const topUsers = Object.entries(userStats)
-        .sort((a, b) => b[1].count - a[1].count)
-        .slice(0, 5);
-    
-    const container = document.getElementById('topUsers');
-    container.innerHTML = '';
-    
-    topUsers.forEach(([userId, stats], index) => {
-        const div = document.createElement('div');
-        div.className = 'top-user-item';
-        div.innerHTML = `
-            <div class="top-user-rank">${index + 1}</div>
-            <div class="top-user-info">
-                <div class="top-user-name">${stats.name}</div>
-                <div class="top-user-id">ID: ${userId}</div>
-            </div>
-            <div class="top-user-count">${stats.count}</div>
-        `;
-        container.appendChild(div);
-    });
+function updateLastUpdateTime() {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('ru-RU');
+    document.getElementById('lastUpdate').textContent = timeStr;
 }
 
 // ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 function updateRecipientField() {
     const sendType = document.getElementById('sendType').value;
-    const recipientGroup = document.getElementById('recipientGroup');
+    const group = document.getElementById('recipientGroup');
     
     if (sendType === 'user' || sendType === 'test') {
-        recipientGroup.style.display = 'block';
-        document.getElementById('userId').placeholder = sendType === 'test' 
-            ? 'Ваш Telegram ID для теста' 
-            : 'Введите Telegram ID пользователя';
+        group.style.display = 'block';
     } else {
-        recipientGroup.style.display = 'none';
+        group.style.display = 'none';
     }
-}
-
-function formatText(type) {
-    const textarea = document.getElementById('messageText');
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = textarea.value.substring(start, end);
-    
-    let formattedText = '';
-    
-    switch(type) {
-        case 'bold':
-            formattedText = `<b>${selectedText}</b>`;
-            break;
-        case 'italic':
-            formattedText = `<i>${selectedText}</i>`;
-            break;
-        case 'code':
-            formattedText = `<code>${selectedText}</code>`;
-            break;
-        case 'link':
-            const url = prompt('Введите URL:', 'https://');
-            if (url) {
-                const text = prompt('Текст ссылки:', selectedText || 'ссылка');
-                formattedText = `<a href="${url}">${text}</a>`;
-            }
-            break;
-    }
-    
-    if (formattedText) {
-        textarea.value = textarea.value.substring(0, start) + 
-                        formattedText + 
-                        textarea.value.substring(end);
-        updateCharCount();
-    }
-}
-
-function previewMessage() {
-    const message = document.getElementById('messageText').value;
-    if (!message) {
-        showStatusMessage('❌ Нет текста для предпросмотра', 'error');
-        return;
-    }
-    
-    // Создаём временный элемент для предпросмотра
-    const preview = message
-        .replace(/<b>(.*?)<\/b>/g, '**$1**')
-        .replace(/<i>(.*?)<\/i>/g, '*$1*')
-        .replace(/<code>(.*?)<\/code>/g, '`$1`')
-        .replace(/<a href="(.*?)">(.*?)<\/a>/g, '[$2]($1)');
-    
-    alert(`📝 Предпросмотр сообщения:\n\n${preview}\n\n👉 HTML-теги будут корректно отображаться в Telegram`);
-}
-
-function addTemplate() {
-    const templates = [
-        'Спасибо за ваше предложение! Мы его рассмотрим в ближайшее время.',
-        'Ваше предложение принято в работу. Мы свяжемся с вами для уточнений.',
-        'Благодарим за обратную связь! Ваше замечание очень ценно для нас.',
-        'Предложение получено. Наша команда уже изучает его.',
-        'Спасибо за идею! Мы добавим её в список планируемых улучшений.'
-    ];
-    
-    const randomTemplate = templates[Math.floor(Math.random() * templates.length)];
-    
-    const textarea = document.getElementById('messageText');
-    const currentText = textarea.value;
-    
-    if (currentText && !currentText.endsWith('\n\n')) {
-        textarea.value = currentText + '\n\n' + randomTemplate;
-    } else {
-        textarea.value = currentText + randomTemplate;
-    }
-    
-    updateCharCount();
-}
-
-function clearForm() {
-    document.getElementById('messageText').value = '';
-    document.getElementById('userId').value = '';
-    updateCharCount();
-    showStatusMessage('🧹 Форма очищена', 'info');
 }
 
 function updateCharCount() {
-    const message = document.getElementById('messageText').value;
-    const count = message.length;
+    const text = document.getElementById('messageText').value;
+    const count = text.length;
+    document.getElementById('charCount').textContent = count;
+    
+    // Подсветка
     const counter = document.getElementById('charCount');
-    
-    counter.textContent = count;
-    
     if (count > 4000) {
-        counter.style.color = 'var(--danger)';
+        counter.style.color = '#ef4444';
         counter.style.fontWeight = 'bold';
     } else if (count > 3500) {
-        counter.style.color = 'var(--warning)';
+        counter.style.color = '#f59e0b';
         counter.style.fontWeight = 'bold';
     } else {
         counter.style.color = '';
@@ -839,146 +612,198 @@ function updateCharCount() {
     }
 }
 
-function updateUptime() {
-    const now = new Date();
-    const diff = Math.floor((now - botStartTime) / 1000);
-    const hours = Math.floor(diff / 3600).toString().padStart(2, '0');
-    const minutes = Math.floor((diff % 3600) / 60).toString().padStart(2, '0');
-    const seconds = (diff % 60).toString().padStart(2, '0');
+function formatText(type) {
+    const textarea = document.getElementById('messageText');
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = textarea.value.substring(start, end);
     
-    document.getElementById('uptimeDisplay').textContent = `${hours}:${minutes}:${seconds}`;
-}
-
-function updateLastSync() {
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('ru-RU', {
-        hour: '2-digit',
-        minute: '2-digit'
-    });
-    document.getElementById('lastSync').textContent = timeStr;
-}
-
-function updatePagination() {
-    document.getElementById('pageInfo').textContent = `Страница ${currentPage}`;
-}
-
-function prevPage() {
-    if (currentPage > 1) {
-        currentPage--;
-        loadSuggestions();
+    let formatted = '';
+    switch(type) {
+        case 'bold':
+            formatted = `<b>${selected}</b>`;
+            break;
+        case 'italic':
+            formatted = `<i>${selected}</i>`;
+            break;
+        case 'code':
+            formatted = `<code>${selected}</code>`;
+            break;
+    }
+    
+    if (formatted) {
+        textarea.value = textarea.value.substring(0, start) + 
+                        formatted + 
+                        textarea.value.substring(end);
+        updateCharCount();
     }
 }
 
-function nextPage() {
-    currentPage++;
-    loadSuggestions();
+function addTemplate() {
+    const templates = [
+        'Спасибо за ваше предложение! Мы его рассмотрим.',
+        'Ваше предложение принято в работу.',
+        'Благодарим за обратную связь!',
+        'Мы получили ваше предложение и изучаем его.',
+        'Спасибо за идею! Мы добавим её в план.'
+    ];
+    
+    const random = templates[Math.floor(Math.random() * templates.length)];
+    const textarea = document.getElementById('messageText');
+    
+    if (textarea.value && !textarea.value.endsWith('\n\n')) {
+        textarea.value += '\n\n' + random;
+    } else {
+        textarea.value += random;
+    }
+    
+    updateCharCount();
 }
 
-function filterSuggestions(filter) {
-    currentFilter = filter;
-    currentPage = 1;
+function previewMessage() {
+    const message = document.getElementById('messageText').value;
+    if (!message) {
+        showStatus('❌ Нет текста для предпросмотра', 'error');
+        return;
+    }
     
-    // Обновляем активные кнопки
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.classList.remove('active');
+    alert(`📝 Предпросмотр сообщения:\n\n${message}\n\n👉 HTML-теги будут отображаться в Telegram`);
+}
+
+function clearForm() {
+    document.getElementById('messageText').value = '';
+    document.getElementById('userId').value = '';
+    document.getElementById('replyText').value = '';
+    updateCharCount();
+}
+
+function updateTime() {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('ru-RU');
+    const dateStr = now.toLocaleDateString('ru-RU');
+    
+    // Можно добавить отображение времени где-нибудь
+}
+
+// ===== ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ =====
+function refreshSuggestions() {
+    loadFirebaseData();
+    showStatus('🔄 Обновление данных...', 'info');
+    setTimeout(() => showStatus('✅ Данные обновлены', 'success'), 1000);
+}
+
+async function exportData() {
+    if (allSuggestions.length === 0) {
+        showStatus('❌ Нет данных для экспорта', 'error');
+        return;
+    }
+    
+    showStatus('📊 Подготовка экспорта...', 'info');
+    
+    // Формируем CSV
+    let csv = 'ID,Пользователь,Telegram ID,Сообщение,Дата,Прочитано,С ответом\n';
+    
+    allSuggestions.forEach(suggestion => {
+        const date = suggestion.timestamp 
+            ? (suggestion.timestamp.toDate ? suggestion.timestamp.toDate().toLocaleString('ru-RU') : suggestion.timestamp)
+            : 'Неизвестно';
+        
+        const row = [
+            suggestion.id,
+            `"${(suggestion.userName || 'Аноним').replace(/"/g, '""')}"`,
+            suggestion.userId || '',
+            `"${((suggestion.message || '').replace(/"/g, '""'))}"`,
+            date,
+            suggestion.read ? 'Да' : 'Нет',
+            suggestion.answered ? 'Да' : 'Нет'
+        ].join(',');
+        
+        csv += row + '\n';
     });
-    event.target.classList.add('active');
     
-    loadSuggestions();
+    // Создаём и скачиваем файл
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', `предложения_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showStatus('✅ Данные экспортированы в CSV', 'success');
 }
 
-async function exportSuggestions() {
-    if (!db) return;
+async function sendTestToAll() {
+    if (!confirm('Отправить тестовое сообщение всем пользователям?')) return;
     
-    showStatusMessage('<i class="fas fa-spinner fa-spin"></i> Подготовка экспорта...', 'info');
+    const testMessage = '🔔 *Тестовое сообщение от администратора*\n\nЭто тестовое сообщение для проверки работы системы рассылки.';
+    
+    await sendBroadcast(testMessage);
+}
+
+async function markAllAsRead() {
+    if (!db || allSuggestions.length === 0) return;
+    
+    if (!confirm('Пометить все предложения как прочитанные?')) return;
+    
+    showStatus('📨 Обработка...', 'info');
     
     try {
-        const snapshot = await db.collection('suggestions').get();
-        const suggestions = [];
+        const batch = db.batch();
+        const unread = allSuggestions.filter(s => !s.read);
         
-        snapshot.forEach((doc) => {
-            suggestions.push({
-                id: doc.id,
-                ...doc.data()
+        unread.forEach(suggestion => {
+            const ref = db.collection('suggestions').doc(suggestion.id);
+            batch.update(ref, {
+                read: true,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
         });
         
-        // Формируем CSV
-        let csv = 'ID,Пользователь,Telegram ID,Сообщение,Дата,Прочитано,С ответом\n';
-        
-        suggestions.forEach(suggestion => {
-            const date = suggestion.timestamp && suggestion.timestamp.toDate 
-                ? suggestion.timestamp.toDate().toLocaleString('ru-RU')
-                : 'Неизвестно';
-            
-            const row = [
-                suggestion.id,
-                suggestion.userName || 'Аноним',
-                suggestion.userId || '',
-                `"${(suggestion.message || '').replace(/"/g, '""')}"`,
-                date,
-                suggestion.read ? 'Да' : 'Нет',
-                suggestion.answered ? 'Да' : 'Нет'
-            ].join(',');
-            
-            csv += row + '\n';
-        });
-        
-        // Скачиваем файл
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        
-        link.setAttribute('href', url);
-        link.setAttribute('download', `предложения_${new Date().toISOString().split('T')[0]}.csv`);
-        link.style.visibility = 'hidden';
-        
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        showStatusMessage('✅ Данные экспортированы в CSV', 'success');
+        await batch.commit();
+        showStatus(`✅ Помечено ${unread.length} предложений`, 'success');
         
     } catch (error) {
-        console.error('Ошибка экспорта:', error);
-        showStatusMessage('❌ Ошибка экспорта данных', 'error');
+        console.error('Ошибка:', error);
+        showStatus('❌ Ошибка обновления', 'error');
     }
 }
 
-function copyToken() {
-    navigator.clipboard.writeText(BOT_TOKEN)
-        .then(() => showStatusMessage('✅ Токен скопирован в буфер', 'success'))
-        .catch(() => showStatusMessage('❌ Ошибка копирования', 'error'));
-}
-
-async function updateSubscribersCount() {
+async function clearDatabase() {
+    if (!confirm('⚠️ ВНИМАНИЕ! Это удалит ВСЕ предложения из базы. Продолжить?')) return;
+    
     if (!db) return;
     
+    showStatus('🗑️ Удаление...', 'info');
+    
     try {
-        // Получаем уникальных пользователей
+        const batch = db.batch();
         const snapshot = await db.collection('suggestions').get();
-        const users = new Set();
         
-        snapshot.forEach((doc) => {
-            const data = doc.data();
-            if (data.userId) {
-                users.add(data.userId);
-            }
+        snapshot.forEach(doc => {
+            batch.delete(doc.ref);
         });
         
-        document.getElementById('subscribersCount').textContent = users.size;
+        await batch.commit();
+        showStatus('✅ База данных очищена', 'success');
+        
     } catch (error) {
-        console.error('Ошибка получения подписчиков:', error);
+        console.error('Ошибка удаления:', error);
+        showStatus('❌ Ошибка удаления', 'error');
     }
 }
 
-async function saveMessageToHistory(userId, message) {
+async function saveToHistory(userId, message) {
     if (!db) return;
     
     try {
         await db.collection('messages').add({
             userId: userId,
-            message: message,
+            message: message.substring(0, 200),
             timestamp: firebase.firestore.FieldValue.serverTimestamp(),
             type: 'outgoing'
         });
@@ -987,38 +812,18 @@ async function saveMessageToHistory(userId, message) {
     }
 }
 
-function showStatusMessage(message, type = 'info') {
-    const statusDiv = document.getElementById('messageStatus');
-    statusDiv.className = `status-message show ${type}`;
-    statusDiv.innerHTML = message;
+function showStatus(message, type = 'info') {
+    const statusEl = document.getElementById('messageStatus');
+    statusEl.className = `status-message show ${type}`;
+    statusEl.innerHTML = message;
     
     if (type !== 'info') {
         setTimeout(() => {
-            statusDiv.className = 'status-message';
-            statusDiv.innerHTML = '';
+            statusEl.className = 'status-message';
+            statusEl.innerHTML = '';
         }, 3000);
     }
 }
 
-function loadStats() {
-    messagesSent = parseInt(localStorage.getItem('messages_sent') || '0');
-    document.getElementById('messagesSentCount').textContent = messagesSent;
-}
-
-// ===== ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ =====
-async function loadStats() {
-    messagesSent = parseInt(localStorage.getItem('messages_sent') || '0');
-    document.getElementById('messagesSentCount').textContent = messagesSent;
-}
-
-function updateSuggestionsStats(suggestions) {
-    if (!suggestions) return;
-    
-    const total = suggestions.length;
-    const newCount = suggestions.filter(s => !s.read).length;
-    const answeredCount = suggestions.filter(s => s.answered).length;
-    
-    document.getElementById('totalSuggestions').textContent = total;
-    document.getElementById('newSuggestions').textContent = newCount;
-    document.getElementById('answeredSuggestions').textContent = answeredCount;
-}
+// ===== ГОТОВО! =====
+console.log('✨ Система бота-предложки готова к работе!');
