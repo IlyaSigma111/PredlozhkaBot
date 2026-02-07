@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Бот-Предложка | Управление</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="fab fa-telegram"></i>
+                </div>
+                <div>
+                    <h1 class="logo-text">Бот-Предложка</h1>
+                    <p class="logo-subtext">Отправка сообщений и просмотр ответов</p>
+                </div>
+            </div>
+            <div id="botStatus" class="status-badge">
+                <div class="status-dot offline"></div>
+                <span>Проверка статуса...</span>
+            </div>
+        </header>
+
+        <!-- Двойная сетка -->
+        <div class="grid">
+            <!-- Карточка отправки сообщений -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <i class="fas fa-paper-plane"></i>
+                    </div>
+                    <div>
+                        <h2 class="card-title">Отправка сообщений</h2>
+                        <p class="card-subtitle">Отправьте сообщение через бота</p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Выберите получателя</label>
+                    <select id="recipientSelector" class="form-control">
+                        <option value="">Выберите чат...</option>
+                        <option value="-1003835999605">Основная группа</option>
+                        <option value="chat_id">Личное сообщение</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Сообщение</label>
+                    <textarea id="messageText" class="form-control" 
+                              placeholder="Введите сообщение для отправки..."></textarea>
+                    <div class="char-counter">
+                        <span id="charCount">0</span>/4000
+                    </div>
+                </div>
+                
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="sendMessage()">
+                        <i class="fas fa-paper-plane"></i> Отправить
+                    </button>
+                    <button class="btn btn-secondary" onclick="sendTestMessage()">
+                        <i class="fas fa-vial"></i> Тест
+                    </button>
+                    <button class="btn btn-success" onclick="sendToBotUsers()">
+                        <i class="fas fa-broadcast-tower"></i> Подписчикам
+                    </button>
+                </div>
+                
+                <div id="messageStatus" class="status-message">
+                    <!-- Статус отправки -->
+                </div>
+            </div>
+            
+            <!-- Карточка ответов с сайта -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <i class="fas fa-comments"></i>
+                    </div>
+                    <div>
+                        <h2 class="card-title">Ответы с сайта</h2>
+                        <p class="card-subtitle">Просмотр полученных предложений</p>
+                    </div>
+                </div>
+                
+                <div class="controls-row">
+                    <button class="btn btn-secondary" onclick="refreshResponses()">
+                        <i class="fas fa-sync-alt"></i> Обновить
+                    </button>
+                    <select id="filterResponses" class="form-control" style="width: auto;">
+                        <option value="all">Все ответы</option>
+                        <option value="today">Сегодня</option>
+                        <option value="week">За неделю</option>
+                        <option value="month">За месяц</option>
+                    </select>
+                </div>
+                
+                <div class="responses-container" id="responsesContainer">
+                    <div class="response-item">
+                        <div class="response-header">
+                            <div class="response-user">
+                                <i class="fas fa-user"></i>
+                                <span class="response-name">Анонимный пользователь</span>
+                            </div>
+                            <div class="response-time">12:30, сегодня</div>
+                        </div>
+                        <div class="response-text">
+                            Это пример ответа с сайта. Здесь будут отображаться предложения, которые пользователи отправляют через бота.
+                        </div>
+                        <div class="response-actions">
+                            <button class="btn-icon small" onclick="replyToResponse(this)">
+                                <i class="fas fa-reply"></i>
+                            </button>
+                            <button class="btn-icon small" onclick="deleteResponse(this)">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="empty-state" id="emptyResponses">
+                    <i class="fas fa-inbox fa-2x"></i>
+                    <p>Пока нет ответов</p>
+                    <p class="small">Ответы с сайта появятся здесь</p>
+                </div>
+                
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <span class="stat-value" id="totalResponses">0</span>
+                        <span class="stat-label">Всего ответов</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="todayResponses">0</span>
+                        <span class="stat-label">Сегодня</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="unreadResponses">0</span>
+                        <span class="stat-label">Непрочитано</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Статистика бота -->
+        <div class="bot-stats">
+            <div class="stat-card">
+                <div class="stat-value" id="botSubscribers">-</div>
+                <div class="stat-label">Подписчиков бота</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="messagesSent">0</div>
+                <div class="stat-label">Сообщений отправлено</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="botUptime">00:00</div>
+                <div class="stat-label">Время работы</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="lastActive">--:--</div>
+                <div class="stat-label">Последняя активность</div>
+            </div>
+        </div>
+        
+        <!-- Информация о боте -->
+        <div class="bot-info">
+            <div class="info-item">
+                <i class="fas fa-robot"></i>
+                <span>Бот: <strong>@suggestion_helper_bot</strong></span>
+            </div>
+            <div class="info-item">
+                <i class="fas fa-key"></i>
+                <span>Токен: <code>8597583917:AAFPOQqsJSe8vAxP0Af8VEEQwgKYH3iogT8</code></span>
+            </div>
+            <div class="info-item">
+                <i class="fas fa-link"></i>
+                <span>Webhook: <code id="webhookStatus">Не установлен</code></span>
+            </div>
+            <button class="btn btn-secondary" onclick="setupWebhook()">
+                <i class="fas fa-plug"></i> Настроить Webhook
+            </button>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
